@@ -14,7 +14,11 @@ end
 prob = ODEProblem(f!, [0.5], (0.0, 1.0))
 
 function output_func(sol, ctx)
-    return last(sol), false
+    # `last(sol.u)` rather than `last(sol)`: RecursiveArrayTools v4 makes
+    # `ODESolution` an `AbstractArray`, so `last(sol)` returns the last *scalar*
+    # element instead of the last timestep `Vector`. See OrdinaryDiffEq v7
+    # NEWS.md, "ODESolution is now an AbstractArray".
+    return last(sol.u), false
 end
 
 function prob_func(prob, ctx)
