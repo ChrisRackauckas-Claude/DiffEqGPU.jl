@@ -129,9 +129,9 @@ dp
 ```
 
 For NVIDIA GPUs, load `CUDA` and pass `CUDA.CUDABackend()` instead of `CPU()`.
-The draft CUDA tests currently require a
-[CUDACore allocation-rule backport](https://github.com/ChrisRackauckas-Claude/CUDA.jl/commit/081de781a6f81a63cb8d1d88c77eb7f5243a163a);
-CUDA gradients with released dependencies remain unverified.
+CUDA gradients with released dependencies remain unverified. The
+[upstream GPUCompiler compatibility work](https://github.com/EnzymeAD/Enzyme.jl/pull/3512)
+and compatible CUDA allocation rules are required for that configuration.
 Loading Enzyme activates DiffEqGPU's transfer rules automatically. Reset the shadow
 buffer `dp` to zero before each independent reverse-mode call: Enzyme accumulates
 into it. Fixed-step gradients differentiate the numerical steps; adaptive gradients

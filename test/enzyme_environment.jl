@@ -15,13 +15,6 @@ let
         code = """
         using Pkg
         Pkg.develop(path = $(repr(root)))
-        if $(target == "enzyme_cuda")
-        Pkg.add(PackageSpec(
-            url = "https://github.com/ChrisRackauckas-Claude/CUDA.jl.git",
-            subdir = "CUDACore",
-            rev = "081de781a6f81a63cb8d1d88c77eb7f5243a163a"
-        ))
-        end
         Pkg.instantiate()
         include($(repr(joinpath(@__DIR__, "qa", "enzyme.jl"))))
         if $(target == "enzyme_cuda")
