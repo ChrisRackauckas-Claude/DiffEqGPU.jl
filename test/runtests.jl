@@ -19,11 +19,11 @@ const GROUP = get(ENV, "GROUP", "CUDA")
 
 using SafeTestsets, Test
 
-if GROUP in ("CUDA", "Enzyme")
+if GROUP == "Enzyme"
     @time @safetestset "Enzyme ensemble gradients" begin
         include("enzyme_environment.jl")
     end
-    GROUP == "Enzyme" && exit()
+    exit()
 end
 
 if GROUP == "QA"
@@ -145,6 +145,12 @@ if GROUP == "CUDA"
         @time @safetestset "GPU Kernelized SDE Convergence" begin
             include("gpu_kernel_de/gpu_sde_convergence.jl")
         end
+    end
+end
+
+if GROUP == "CUDA"
+    @time @safetestset "Enzyme ensemble gradients" begin
+        include("enzyme_environment.jl")
     end
 end
 
