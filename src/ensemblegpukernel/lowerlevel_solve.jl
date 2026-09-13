@@ -197,7 +197,7 @@ function vectorized_solve(
             error("The algorithm is not compatible with the chosen noise type. Please see the documentation on the solver methods")
         siea_kernel(backend)
     else
-        error("The algorithm is not compatible with the chosen problem type. Please see the documentation on the solver methods")
+        throw(ArgumentError("Unsupported SDE algorithm for kernel-based solving: $(typeof(alg))"))
     end
 
     if backend isa CPU
