@@ -1,4 +1,4 @@
-@inline function step!(integ::GPUV7I{false, S, T}, ts, us) where {T, S}
+@muladd @inline function step!(integ::GPUV7I{false, S, T}, ts, us) where {T, S}
     @unpack dt = integ
     t = integ.t
     p = integ.p
@@ -75,7 +75,7 @@ end
 
 #############################Adaptive Version#####################################
 
-@inline function step!(integ::GPUAV7I{false, S, T}, ts, us) where {S, T}
+@muladd @inline function step!(integ::GPUAV7I{false, S, T}, ts, us) where {S, T}
     beta1, beta2, qmax, qmin, gamma, qoldinit,
         _ = build_adaptive_controller_cache(
         integ.alg,
@@ -154,11 +154,11 @@ end
         tmp = tmp ./ (abstol .+ max.(abs.(uprev), abs.(u)) * reltol)
         EEst = DiffEqBase.ODE_DEFAULT_NORM(tmp, t)
 
-        q11 = EEst^beta1
+        q11 = _controller_pow(EEst, beta1)
         if iszero(EEst)
             q = inv(qmax)
         else
-            q = q11 / (qold^beta2)
+            q = q11 / _controller_pow(qold, beta2)
         end
 
         if EEst > 1

@@ -5,7 +5,7 @@
 @inline _load_kernel_arg(x::AbstractArray{<:Any, 0}) = @inbounds x[]
 @inline _load_kernel_arg(x::AbstractArray) = x
 
-@kernel function ode_solve_kernel(
+@muladd @kernel function ode_solve_kernel(
         probs, alg, _us, _ts, _dt, callback,
         tstops,
         saveat, ::Val{save_everystep}
@@ -22,7 +22,9 @@
 
     u0, p_init,
         init_success = if SciMLBase.has_initialization_data(prob.f)
-        gpu_initialization_solve(prob, SimpleTrustRegion(), 1.0e-6, 1.0e-6)
+        gpu_initialization_solve(
+            prob, SimpleTrustRegion(), eltype(prob.u0)(1.0e-6), eltype(prob.u0)(1.0e-6)
+        )
     else
         prob.u0, prob.p, true
     end
@@ -75,7 +77,7 @@
     end
 end
 
-@kernel function ode_asolve_kernel(
+@muladd @kernel function ode_asolve_kernel(
         probs, alg, _us, _ts, _dt, callback, tstops,
         _abstol, _reltol,
         saveat,

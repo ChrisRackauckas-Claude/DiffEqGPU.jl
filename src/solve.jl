@@ -190,12 +190,34 @@ struct KernelODEProblem{U, T, IIP, P, F, K, PT} <: SciMLBase.AbstractODEProblem{
 end
 _kernel_record(prob) = prob
 @noinline function _kernel_record(prob::SciMLBase.ImmutableODEProblem{U, T, IIP, P, F, K, PT}) where {U, T, IIP, P, F, K, PT}
-    return KernelODEProblem{U, T, IIP, P, F, K, PT}(prob.p, prob.u0, prob.tspan, prob.f, prob.kwargs, prob.problem_type)
+    kwargs = NamedTuple(prob.kwargs)
+    return KernelODEProblem{U, T, IIP, P, F, typeof(kwargs), PT}(prob.p, prob.u0, prob.tspan, prob.f, kwargs, prob.problem_type)
 end
 
-@noinline function _make_kernel_problem(ensembleprob, i, sim_seeds, rng_func, master_rng)
+@inline function _ensemble_problem_fields_isbits(prob)
+    @inbounds for i in 1:nfields(prob)
+        isbits(getfield(prob, i)) || return false
+    end
+    return true
+end
+
+# Mutable ODEProblem wrappers are never `isbits`, but their fields often are. Reconstructing
+# the wrapper shares those fields and still isolates `prob_func` field reassignment.
+function _shallow_reconstruct_problem(prob::ODEProblem{uType, tType, iip}) where {uType, tType, iip}
+    return ODEProblem{iip}(prob.f, prob.u0, prob.tspan, prob.p, prob.problem_type; prob.kwargs...)
+end
+_shallow_reconstruct_problem(prob) = deepcopy(prob)
+
+@inline function _safety_copy_ensemble_prob(prob)
+    isbits(prob) && return prob
+    return _ensemble_problem_fields_isbits(prob) ? _shallow_reconstruct_problem(prob) :
+        deepcopy(prob)
+end
+
+@noinline function _make_kernel_problem(ensembleprob, i, sim_seeds, rng_func::F, master_rng) where {F}
     ctx = _make_ensemble_context(i, sim_seeds, rng_func, master_rng)
-    prob = ensembleprob.safetycopy ? deepcopy(ensembleprob.prob) : ensembleprob.prob
+    prob = ensembleprob.safetycopy ? _safety_copy_ensemble_prob(ensembleprob.prob) :
+        ensembleprob.prob
     return make_prob_compatible(ensembleprob.prob_func(prob, ctx))
 end
 
@@ -204,9 +226,18 @@ end
 @inline _unwrap_kernel_host(prob) = prob
 @inline _unwrap_kernel_host(prob::Ref) = prob[]
 
-function _prepare_kernel_problems(ensembleprob, backend, I, sim_seeds, rng_func, master_rng)
+# Kernels read problem fields (`f`, `u0`, `tspan`, `p`, `kwargs`) directly, so
+# outside autodiff kernels can consume the adapted problem without the
+# `KernelODEProblem` repackaging. Enzyme needs the record layout for host
+# aggregate shadows.
+@inline function _adapt_kernel_problem(backend, prob)
+    adapted = adapt(backend, prob)
+    return within_autodiff() ? _kernel_record(adapted) : adapted
+end
+
+function _prepare_kernel_problems(ensembleprob, backend, I, sim_seeds, rng_func::F, master_rng) where {F}
     first_prob = _make_kernel_problem(ensembleprob, first(I), sim_seeds, rng_func, master_rng)
-    first_adapted = _kernel_record(adapt(backend, first_prob))
+    first_adapted = _adapt_kernel_problem(backend, first_prob)
     first_ref = _wrap_kernel_host(first_prob)
     probs = Vector{typeof(first_ref)}(undef, length(I))
     adapted_probs = Vector{typeof(first_adapted)}(undef, length(I))
@@ -216,9 +247,24 @@ function _prepare_kernel_problems(ensembleprob, backend, I, sim_seeds, rng_func,
     for j in 2:length(I)
         prob = _make_kernel_problem(ensembleprob, I[j], sim_seeds, rng_func, master_rng)
         probs[j] = _wrap_kernel_host(prob)
-        adapted_probs[j] = _kernel_record(adapt(backend, prob))
+        adapted_probs[j] = _adapt_kernel_problem(backend, prob)
     end
     return probs, adapted_probs
+end
+
+@inline function _kernel_solution(prob, alg, ts, us, i)
+    times = @view ts[:, i]
+    states = @view us[:, i]
+    sol_idx = findlast(x -> x != prob.tspan[1], times)
+    if sol_idx === nothing
+        @error "No solution found" tspan = prob.tspan[1] times
+        error("Batch solve failed")
+    end
+    return SciMLBase.build_solution(
+        prob, alg, @view(times[1:sol_idx]), @view(states[1:sol_idx]);
+        k = nothing, stats = nothing, calculate_error = false,
+        retcode = sol_idx != length(times) ? ReturnCode.Terminated : ReturnCode.Success
+    )
 end
 
 function batch_solve(
@@ -279,24 +325,9 @@ function batch_solve(
         )
         [
             begin
-                ts = @view solts[:, i]
-                us = @view kernel_solus[:, i]
-                sol_idx = findlast(x -> x != _unwrap_kernel_host(kernel_probs[i]).tspan[1], ts)
-                if sol_idx === nothing
-                    @error "No solution found" tspan = _unwrap_kernel_host(kernel_probs[i]).tspan[1] ts
-                    error("Batch solve failed")
-                end
-                @views ensembleprob.output_func(
-                    SciMLBase.build_solution(
-                        _unwrap_kernel_host(kernel_probs[i]),
-                        alg,
-                        ts[1:sol_idx],
-                        us[1:sol_idx],
-                        k = nothing,
-                        stats = nothing,
-                        calculate_error = false,
-                        retcode = sol_idx != length(ts) ? ReturnCode.Terminated :
-                            ReturnCode.Success
+                ensembleprob.output_func(
+                    _kernel_solution(
+                        _unwrap_kernel_host(kernel_probs[i]), alg, solts, kernel_solus, i
                     ),
                     _make_ensemble_context(I[i], sim_seeds, rng_func, master_rng)
                 )[1]
@@ -455,14 +486,9 @@ function batch_solve_up(ensembleprob, probs, alg, ensemblealg, I, u0, p; kwargs.
         colorvec = nothing
     end
 
+    _alg = ensemble_array_alg(alg, probs[1].f, len)
     _callback = generate_callback(probs[1], length(I), ensemblealg; kwargs...)
     prob = generate_problem(probs[1], u0, p, jac_prototype, colorvec)
-
-    if hasproperty(alg, :linsolve)
-        _alg = remake(alg, linsolve = LinSolveGPUSplitFactorize(len, -1))
-    else
-        _alg = alg
-    end
 
     sol = solve(
         prob, _alg; kwargs..., callback = _callback, merge_callbacks = false,
@@ -558,14 +584,9 @@ function ChainRulesCore.rrule(
         colorvec = nothing
     end
 
+    _alg = ensemble_array_alg(alg, probs[1].f, len)
     _callback = generate_callback(probs[1], length(I), ensemblealg)
     prob = generate_problem(probs[1], u0, pdual, jac_prototype, colorvec)
-
-    if hasproperty(alg, :linsolve)
-        _alg = remake(alg, linsolve = LinSolveGPUSplitFactorize(len, -1))
-    else
-        _alg = alg
-    end
 
     sol = solve(
         prob, _alg; kwargs..., callback = _callback, merge_callbacks = false,

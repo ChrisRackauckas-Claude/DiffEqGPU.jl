@@ -40,6 +40,18 @@ if GROUP == "QA"
     exit()
 end
 
+if GROUP in ("CPU", "JLArrays", "CUDA", "AMDGPU")
+    @time @safetestset "EnsembleGPUArray batched LU" begin
+        include("ensemblegpuarray_lufact.jl")
+    end
+end
+
+if GROUP == "CPU" || GROUP in SUPPORTS_LUFACT
+    @time @safetestset "EnsembleGPUArray implicit methods" begin
+        include("ensemblegpuarray_implicit_jac.jl")
+    end
+end
+
 @time @safetestset "GPU Kernelized Stiff ODE Mass Matrix" begin
     include("gpu_kernel_de/stiff_ode/gpu_ode_mass_matrix.jl")
 end
@@ -130,14 +142,26 @@ if GROUP == "CPU"
     @time @safetestset "EnsembleGPUArray scalar batch parameters" begin
         include("ensemblegpuarray_scalar_batch.jl")
     end
+    @time @safetestset "Kernel ensemble host storage" begin
+        include("gpu_kernel_de/host_fastpath.jl")
+    end
     @time @safetestset "Adaptive endpoint termination" begin
         include("gpu_kernel_de/adaptive_endpoint.jl")
+    end
+    @time @safetestset "Allocation Tests" begin
+        include("alloc_tests.jl")
     end
 end
 
 if GROUP == "JLArrays"
     @time @safetestset "GPU callback event detection" begin
         include("callback_event_detection.jl")
+    end
+end
+
+if GROUP in ("CUDA", "JLArrays")
+    @time @safetestset "Kernel problem adaptation" begin
+        include("gpu_kernel_de/problem_adaptation.jl")
     end
 end
 
@@ -163,12 +187,5 @@ end
 if GROUP == "CUDA"
     @time @safetestset "Enzyme ensemble gradients" begin
         include("enzyme_environment.jl")
-    end
-end
-
-# Allocation tests run separately to avoid precompilation interference
-if GROUP == "all" || GROUP == "nopre"
-    @time @safetestset "Allocation Tests" begin
-        include("alloc_tests.jl")
     end
 end

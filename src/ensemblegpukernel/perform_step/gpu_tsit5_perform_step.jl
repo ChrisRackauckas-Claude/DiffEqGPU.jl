@@ -65,7 +65,7 @@ end
 
 #############################Adaptive Version#####################################
 
-@inline function step!(integ::GPUAT5I{false, S, T}, ts, us) where {S, T}
+@muladd @inline function step!(integ::GPUAT5I{false, S, T}, ts, us) where {S, T}
     beta1, beta2, qmax, qmin, gamma, qoldinit,
         _ = build_adaptive_controller_cache(
         integ.alg,
@@ -121,7 +121,7 @@ end
         tmp = tmp ./ (abstol .+ max.(abs.(uprev), abs.(u)) * reltol)
         EEst = DiffEqBase.ODE_DEFAULT_NORM(tmp, t)
 
-        q11 = EEst^beta1
+        q11 = _controller_pow(EEst, beta1)
         if iszero(EEst)
             q = integ.alg isa GPUTsit5IController ? zero(T) : inv(qmax)
         else
